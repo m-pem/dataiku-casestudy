@@ -1,77 +1,133 @@
-import pandas as pd
-import numpy as np
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from sklearn import metrics
-from sklearn.utils.class_weight import compute_class_weight
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
+import numpy as np
 
+def tune_models(X_train, y_train, weights_train, scoring='f1_macro', random_state=42):
+    """
+    Perform hyperparameter tuning for each model.
+    
+    Parameters:
+    scoring : str, default='f1_macro'
+        Scoring metric for model selection. Options: 'f1_macro', 'f1_weighted'
+    """
+    # Define parameter grids for each model
+    param_grids = {
+        'Logistic Regression': {
+            'model': LogisticRegression(random_state=random_state, class_weight='balanced'),
+            'params': {
+                'C': [0.001, 0.01, 0.1, 1, 10],
+                'max_iter': [100, 200, 300]
+            }
+        },
+        'Random Forest': {
+            'model': RandomForestClassifier(random_state=random_state, class_weight='balanced'),
+            'params': {
+                'max_depth': [3, 5, 7, 10],
+                'min_samples_split': [2, 5, 10],
+                'min_samples_leaf': [1, 2, 4],
+                'n_estimators': [100, 200, 300]  
+            }
+        },
+        'Gradient Boosting': {
+            'model': GradientBoostingClassifier(random_state=random_state),
+            'params': {
+                'n_estimators': [100, 200],
+                'learning_rate': [0.01, 0.1],
+                'max_depth': [3, 5],
+                'subsample': [0.5, 0.7, 1.0] 
+            }
+        }
+    }
 
-# read in data
-data_for_model = pd.read_csv('processed_data/census_income_all_encoded.csv')
+    tuned_models = {}
+    
+    for name, config in param_grids.items():
+        print(f"\nTuning {name}...")
+        grid_search = GridSearchCV(
+            config['model'],
+            config['params'],
+            cv=5,
+            scoring=scoring,
+            n_jobs=-1,
+            verbose=1
+        )
+        grid_search.fit(X_train, y_train, sample_weight=weights_train)
+        
+        print(f"Best parameters for {name}: {grid_search.best_params_}")
+        print(f"Best cross-validation score: {grid_search.best_score_:.3f}")
+        
+        tuned_models[name] = grid_search.best_estimator_
+    
+    return tuned_models
 
-# Extract sample weights
-sample_weights = data_for_model['instance_weight']
+def evaluate_models(X, y, sample_weight=None, random_state=42):
+    """
+    Evaluate multiple models using cross-validation and optional sample weights.
+    
+    Parameters:
+    X : feature matrix
+    y : target vector
+    sample_weight : optional array of sample weights
+    random_state : random seed for reproducibility
+    
+    Returns:
+    dict : Dictionary containing evaluation results for each model
+    """
+    if sample_weight is None:
+        sample_weight = np.ones(len(y))
 
-# separate features and target 
-X = data_for_model.drop(columns=['target', 'instance_weight'])
-y = data_for_model['target']
+    # Split the data with sample weights
+    X_train, X_test, y_train, y_test, weights_train, weights_test = train_test_split(
+        X, y, sample_weight, test_size=0.2, random_state=random_state
+    )
 
+    # Define and tune our models 
+    models = tune_models(X_train, y_train, weights_train, "f1_macro", random_state)
+    
+    # Store results
+    results = {}
+    
+    # Evaluate each model
+    for name, model in models.items():
+        # Fit model with sample weights
+        model.fit(X_train, y_train, sample_weight=weights_train)
+        
+        # Make predictions
+        y_pred = model.predict(X_test)
+        
+        # Store results with weighted metrics
+        results[name] = {
+            'test_accuracy': accuracy_score(y_test, y_pred, sample_weight=weights_test),
+            'test_f1_macro': f1_score(y_test, y_pred, sample_weight=weights_test, average='macro'),
+            'classification_report': classification_report(
+                y_test, y_pred, 
+                sample_weight=weights_test,
+                output_dict=True,  
+                zero_division=0 
+            ),
+            'confusion_matrix': confusion_matrix(
+                y_test, y_pred, 
+                sample_weight=weights_test
+            )
+        }
+    
+    return results, X_test, y_test, weights_test, models
 
-## Right now I'm working to address the imbalanced nature of the data
-# I've tried the below but I think because I'm already using sample weight creating class weights isnt working.
-# The reason this is important is because I'm not getting decent results.
-
-# class_weights = compute_class_weight(
-#     class_weight='balanced',
-#     classes=np.unique(y),
-#     y=y,
-#     sample_weight=sample_weights
-# )
-# class_weight_dict = dict(zip(np.unique(y), class_weights))
-
-
-# I'd like to set up a model pipeline to make it easier to evaluate different models - hmmm maybe not? Seems like a waste of time
-
-
-
-# split into test / train
-X_train, X_test, y_train, y_test, train_weights, test_weights = train_test_split(X, y, sample_weights, test_size=0.2, random_state=42)
-
-# Create a random forest model
-
-# define the model
-rf_model = RandomForestClassifier(n_estimators=100, random_state=42, class_weight='balanced')
-
-# fit the model
-rf_model.fit(X_train, y_train, sample_weight=train_weights)
-
-# evaluate model
-predictions = rf_model.predict(X_test)
-pred_proba = rf_model.predict_proba(X_test)[:,1]
-
-# Calculate metrics
-print("Classification Report (weighted by sample weights):")
-print(metrics.classification_report(y_test, predictions, sample_weight=test_weights))
-
-print("\nConfusion Matrix:")
-print(metrics.confusion_matrix(y_test, predictions, sample_weight=test_weights))
-
-# ROC-AUC score
-roc_auc = metrics.roc_auc_score(y_test, pred_proba, sample_weight=test_weights)
-print(f"\nROC-AUC Score: {roc_auc:.3f}")
-
-
-
-# calculate feature importance
-feature_importance = rf_model.feature_importances_
-feature_importance_df = pd.DataFrame({'feature': X.columns, 'importance': feature_importance})
-feature_importance_df = feature_importance_df.sort_values('importance', ascending=False)
-print(feature_importance_df)
-
-# evaluate model
-
-##################### Reweighted to account for the fact that the data is imbalanced #####################
-
-# calculate feature importance
-
-# save model
+def print_results(results):
+    """
+    Print formatted evaluation results.
+    """
+    print("\nModel Evaluation Results:")
+    print("-" * 50)
+    
+    for name, metrics in results.items():
+        print(f"\n{name}:")
+        print(f"Test set accuracy: {metrics['test_accuracy']:.3f}")
+        print("\nClassification Report:")
+        print(metrics['classification_report'])
+        print("\nConfusion Matrix:")
+        print(metrics['confusion_matrix'])
+        print("-" * 50)
