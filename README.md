@@ -3,10 +3,10 @@
 Here we perform some data analysis
 
 ## Files
-exploratory_data_analysis.ipynb: initaial data processing and data exploration
-data_prep.py: Process cleaned data into features
-model_development.py: Define framework to train, tune, and evaluate models
-model_evaluation.py: Train and explore model performance
+- exploratory_data_analysis.ipynb: initaial data processing and data exploration
+- data_prep.py: Process cleaned data into features
+- model_development.py: Define framework to train, tune, and evaluate models
+- model_evaluation.py: Train and explore model performance
 
 # Overview of project
 
